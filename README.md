@@ -7,6 +7,8 @@ Weave is an AI-powered knowledge graph application. You type plain-language note
 ## Features
 
 - **Automatic graph construction** — enter a note, get nodes and edges. Existing concepts are recognized and reused, never duplicated.
+- **Bounded LLM context (V1)** — only the subgraph relevant to a note reaches the extraction LLM (lexical anchors → 2-hop neighborhood, capped at 64 nodes / 256 edges / an estimated-token budget), so ingest cost doesn't scale with graph size.
+- **Admin pipeline tracer** — an admin-only `/admin/pipeline` page shows every ingest stage end-to-end, including the exact prompt sent to the LLM, the raw response, and the subgraph that was selected.
 - **Infinite canvas** — the graph grows with your knowledge (React Flow).
 - **Interactive editing** — drag, rename (double-click), delete, and connect nodes manually.
 - **Accounts & identity** — Google OAuth login, persistent users/roles, server-side sessions (HttpOnly cookie), bootstrap admin.
@@ -14,7 +16,12 @@ Weave is an AI-powered knowledge graph application. You type plain-language note
 - **Rate limits & quotas** — Redis-backed request/token/concurrency limits with global defaults, role policies, user overrides, and hard ceilings.
 - **Usage metering** — every LLM operation records provider tokens, latency, and endpoint.
 - **Analytics** — product/operational analytics events and an admin dashboard (users, roles, policies, usage, analytics, audit log).
-- **AI assistant memory (MCP server)** — `weave-mcp` gives any MCP agent (Hermes, Claude Desktop, Codex) a persistent knowledge/memory store: notes with compact LLM summaries, a server-owned knowledge graph, file storage, and GraphRAG retrieval.
+- **AI assistant memory (MCP server)** — `weave-mcp` is a server-owned memory
+  service for any MCP agent (Hermes, Claude Desktop, Codex): evidence-backed
+  **claims** with provenance, hybrid lexical + semantic retrieval, selective
+  deep verification of high-risk claims, idempotent writes, an audit log, and
+  forgetting/correction lifecycle tools. (The web canvas and the agent memory
+  service are separate workspaces for different use cases.)
 - **Adaptive visualization (Iteration 2)**
   - **Importance** — hub nodes are visually prominent (degree centrality).
   - **Progressive disclosure** — click a node to focus its neighborhood; a breadcrumb returns you to the full graph.
@@ -76,8 +83,8 @@ Browser → Next.js (:3000) ──/api, /auth──▶ weave-api (:3001) ──�
 |---|---|
 | Frontend | Next.js 16 (App Router), React 19, Zustand, React Flow (`@xyflow/react`), Tailwind CSS v4, Motion |
 | Backend | Rust, Axum, Tokio, sqlx (PostgreSQL), redis, oauth2/openidconnect, serde, reqwest (rustls) |
-| MCP server | Rust, `rmcp` (stdio), sqlx + pgvector, fastembed (optional local embeddings) — `weave-mcp` |
-| Shared | `crates/weave-core` — the OpenAI-compatible LLM client + text→graph extractor used by both `weave-api` and `weave-mcp` |
+| MCP server | Rust, `rmcp` (stdio / Streamable HTTP), sqlx + pgvector, fastembed (local ONNX embeddings, bundled in container builds) — `weave-mcp` |
+| Shared | `crates/weave-core` — the OpenAI-compatible LLM client, text→graph extractor, and bounded-subgraph selector used by both `weave-api` and `weave-mcp` |
 | State | PostgreSQL (users, roles, sessions, policies, usage, analytics, audit) · Redis (rate-limit/token/concurrency counters, OAuth state) |
 | LLM | OpenAI-compatible provider via `OPENCODE_BASE_URL` (no key → deterministic mock extractor) |
 
@@ -93,51 +100,71 @@ window stays small.
 
 ```
  MCP agent (Hermes / Claude Desktop / Codex)
-        │  MCP protocol over stdio (JSON-RPC)
+        │  MCP protocol over stdio or Streamable HTTP (JSON-RPC)
         ▼
  ┌────────────────────────── weave-mcp (mcp/) ─────────────────────────┐
- │  server.rs  (MemoryServer + 9 tools)                                │
+ │  server.rs  (MemoryServer + 16 tools)                               │
  │      │             │               │                                │
  │  ingest.rs       recall.rs       graph.rs      (business logic)     │
+ │  validate.rs  entity.rs  claims.rs  verify.rs  (V2/V4 semantics)    │
+ │  retrieval.rs  embed.rs  audit.rs  (V3 hybrid retrieval / V5 audit) │
  │      │             │               │                                │
  │   store.rs ───── SQL ──▶ PostgreSQL "weave_mcp" (notes, entities,   │
- │   files.rs ─── blobs ──▶ data/       relations, documents,          │
- │   embed.rs ── vectors ──▶ pgvector    provenance, pgvector)         │
+ │   files.rs ─── blobs ──▶ data/       relations, claims, documents,  │
+ │   embed.rs ── vectors ──▶ pgvector    provenance, audit, pgvector)  │
  │   summary.rs / weave-core ── LLM (shared with weave-api)            │
  └─────────────────────────────────────────────────────────────────────┘
 ```
 
 Unlike the web app's **client-owned** graph (in the browser), `weave-mcp` keeps
-a **server-owned** graph in PostgreSQL — the persistent memory an agent can read
-and write programmatically. The `weave_mcp` database is created automatically on
-first run; files are stored as hash-keyed blobs under `WEAVE_MCP_DATA_DIR`.
+a **server-owned** memory store in PostgreSQL — the persistent memory an agent can
+read and write programmatically. Each agent runs its own instance/database
+(isolation boundary). The `weave_mcp` database is created automatically on first
+run; files are stored as hash-keyed blobs under `WEAVE_MCP_DATA_DIR`.
 
 ### What it stores
 
-- **Notes/memories** — full text plus a compact LLM **summary** per note. That
-  summary is the token-saving mechanism: `recall_memory` returns a compact
-  context block, and `get_note` fetches full text only on demand.
-- **Knowledge graph** — each note is extracted into entities + relations,
-  resolved against the persisted graph (no duplicate concepts), with
-  provenance linking notes → nodes/edges.
+- **Notes/memories** — full text plus a compact LLM **summary** per note; long
+  documents are chunked into `chunk` notes. Writes are **idempotent** (identical
+  content returns the existing note) and **audited**.
+- **Claims (the durable memory unit)** — every statement is validated
+  deterministically, resolved (exact → alias → create), given an evidence span,
+  a modality (asserted/negated/suggested/conditional), confidence, and status
+  (active/contradicted/superseded/rejected/quarantined). Contradicting claims
+  are linked and preserved — nothing is silently overwritten.
+- **Selective deep verification** — high-risk claims (ambiguous resolution,
+  contradiction, uncertain/comparative language, unsupported evidence) are
+  reviewed by a narrow structured verifier before commit.
 - **Files** — documents, PDFs, images, audio stored on disk with metadata;
   text is extracted for text-ish files and ingested into the graph.
-- **Embeddings + full-text** — pgvector cosine vectors and a Postgres FTS
-  `tsvector` on every note/entity, powering GraphRAG retrieval.
+- **Hybrid retrieval (V3)** — local ONNX embeddings (pgvector) + full-text FTS +
+  graph expansion, merged with reciprocal-rank fusion into a compact context
+  block; `recall_memory` can surface matching claims and flag contradictions.
+- **Audit log** — every significant mutation records actor, action, and
+  before/after values.
 
 ### Tools
 
 | Tool | Purpose |
 |---|---|
-| `remember(text, kind?, tags?)` | Store a note/memory; extract + persist entities/relations; returns added items + summary |
-| `add_file(path, description?)` | Store a file on disk, extract text, ingest into the graph |
+| `remember(text, kind?, tags?, agent_id?)` | Store a note/memory; idempotent; extract + validate + verify claims; returns a write receipt with claim ids |
+| `add_file(path, description?, agent_id?)` | Store a file on disk, extract text, chunk long text, ingest into the graph |
 | `list_notes(limit?, tag?, kind?)` | Browse note summaries, newest first |
 | `get_note(id)` | Full note content + the entities/relations it created |
 | `delete_note(id)` | Delete a note |
 | `search(query, limit?)` | Full-text notes + keyword entities |
 | `get_node(label)` | An entity and the relations touching it |
 | `get_related(label, depth?)` | BFS subgraph around an entity (up to depth 3) |
-| `recall_memory(query, top_k?)` | **Flagship**: hybrid retrieval (vector + FTS + graph) → compact context block |
+| `recall_memory(query, top_k?, include_contradicted?)` | **Flagship**: hybrid retrieval (vector + FTS + graph + claims) → compact context block |
+| `get_claim(id)` | One evidence-backed claim + its source note + contradictions |
+| `list_claims(entity_label, status?, limit?)` | Claims about an entity, filtered by status |
+| `reindex_embeddings(limit?)` | Re-embed rows whose vectors are missing or from an older model |
+| `forget_entity(label)` | Permanently forget an entity + derived memory (audited hard delete) |
+| `prune_notes(days, limit?)` | Audited retention cleanup of old notes |
+| `correct_claim(id, predicate?, object_label?)` | Supersede a claim and commit the corrected version |
+| `memory_stats` | Counts, claim statuses, verifier stats, embedding coverage |
+
+These tools form the stable public contract of the memory service.
 
 ### How to use
 
@@ -150,8 +177,9 @@ cargo run                     # weave-mcp, ready on stdio
 
 The default build uses a deterministic stub embedder so retrieval works offline;
 build with `--features embedding` to enable local semantic vectors (fastembed,
-model downloaded on first use). Point any MCP client at the binary, e.g. for
-Claude Desktop:
+ONNX model downloaded on first use). The containerized deployment builds with
+`http,embedding` so semantic retrieval is enabled by default. Point any MCP
+client at the binary, e.g. for Claude Desktop:
 
 ```json
 {
@@ -218,9 +246,12 @@ Connecting agents:
 
 `weave-mcp` selects its transport via `WEAVE_MCP_TRANSPORT` (`stdio` default |
 `http`) and binds to `WEAVE_MCP_HTTP_ADDR`. The container image is built with
-the `http` feature. `WEAVE_MCP_ALLOWED_HOSTS` optionally restricts accepted
-`Host` headers; unset means the server answers any host so service-name and
-gateway-IP clients both work.
+the `http,embedding` features (Debian trixie base — the prebuilt ONNX runtime
+needs glibc ≥ 2.38); the embedding model is cached under `HF_HOME=/data/hf` on
+the data volume and falls back to the stub embedder if it cannot load.
+`WEAVE_MCP_ALLOWED_HOSTS` optionally restricts accepted `Host` headers; unset
+means the server answers any host so service-name and gateway-IP clients both
+work.
 
 ## Getting Started
 
@@ -328,6 +359,7 @@ All admin routes require an `admin.*` permission (server-side enforced).
 | `/api/admin/policies/users/{id}` | POST | `admin.policies.update` |
 | `/api/admin/analytics/overview` | GET | `admin.analytics.read` |
 | `/api/admin/analytics/users/{id}` | GET | `admin.analytics.read` |
+| `/api/admin/pipeline/ingest` | POST | `admin.pipeline.read` — run the ingest pipeline in observe-only mode with a full LLM trace |
 | `/api/admin/audit` | GET | `admin.audit.read` |
 
 Policy responses use an inheritance-friendly shape so the UI can show
@@ -347,7 +379,7 @@ All graph endpoints require a session and the matching `graph.*` permission.
 
 | Route | Method | Description |
 |---|---|---|
-| `/api/graph/ingest` | POST | Extract a delta (new nodes/edges) from a note |
+| `/api/graph/ingest` | POST | Extract a delta (new nodes/edges) from a note — the extraction LLM receives only the relevant bounded subgraph |
 | `/api/graph/organize` | POST | Advisory AI analysis (groups, missing edges, duplicates) |
 | `/api/graph/label-community` | POST | Suggest a name for a detected community |
 | `/api/graph/search` | POST | Semantic search over the graph |
@@ -387,12 +419,12 @@ cargo test --workspace            # backend + weave-core + mcp tests
 ## Project Layout
 
 ```
-backend/                Rust API (axum) — auth, admin, rate limiting, usage, analytics, organize
+backend/                Rust API (axum) — auth, admin (incl. pipeline tracer), rate limiting, usage, analytics, organize
 backend/migrations/     sqlx migrations (schema + seed data)
-crates/weave-core/      shared library — LLM client, graph models, extractor (used by backend + mcp)
-mcp/                    weave-mcp — personal knowledge/memory MCP server (stdio)
-mcp/migrations/         sqlx migrations for the weave_mcp database (notes, entities, relations, documents, embeddings)
-frontend/src/app/       Next.js pages (/ landing, /app canvas, /login, /admin/*)
+crates/weave-core/      shared library — LLM client, graph models, extractor, bounded-subgraph selector (used by backend + mcp)
+mcp/                    weave-mcp — server-owned agent memory service (stdio / Streamable HTTP)
+mcp/migrations/         sqlx migrations for the weave_mcp database (notes, entities, relations, claims, documents, provenance, embeddings, audit)
+frontend/src/app/       Next.js pages (/ landing, /app canvas, /login, /admin/* incl. /admin/pipeline)
 frontend/src/components/canvas/   CanvasApp, WeaveNode, CanvasHeader, InputDock, InsightsPanel
 frontend/src/components/auth/     RequireAuth, RequireAdmin, UserMenu
 frontend/src/lib/       store (knowledge graph), api (client), auth, graph-ops, graph-projection, communities, layout
