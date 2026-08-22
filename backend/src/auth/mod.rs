@@ -441,6 +441,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(config),
             llm: std::sync::Arc::new(OpenCodeClient::from_env()),
+            embedder: std::sync::Arc::new(weave_core::embed::StubEmbedder),
             db: pool,
             redis,
             oidc: std::sync::Arc::new(oauth::MockOidc::new(

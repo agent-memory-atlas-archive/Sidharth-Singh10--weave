@@ -10,6 +10,7 @@ import type {
   PersistedScene,
   SemanticZoomLevel,
   SessionMeta,
+  SourceRef,
   ViewType,
   XYPosition,
 } from "./graph-types";
@@ -30,12 +31,14 @@ const ZOOM_LEVELS: SemanticZoomLevel[] = [
 ];
 
 const EMPTY_SCENE: PersistedScene = {
-  version: 1,
+  version: 2,
   nodes: [],
   edges: [],
   positions: {},
   viewConfig: { type: "default", semanticZoom: "entity" },
   communityLabels: {},
+  nodeSources: {},
+  edgeSources: {},
   savedAt: Date.now(),
 };
 
@@ -131,7 +134,7 @@ function serializeSceneFromState(
   state: ReturnType<typeof useGraphStore.getState>
 ): PersistedScene {
   return {
-    version: 1,
+    version: 2,
     nodes: state.knowledgeNodes,
     edges: state.knowledgeEdges,
     positions: state.positions,
@@ -140,6 +143,8 @@ function serializeSceneFromState(
       semanticZoom: state.viewConfig.semanticZoom,
     },
     communityLabels: state.communityLabels,
+    nodeSources: state.nodeSources,
+    edgeSources: state.edgeSources,
     savedAt: Date.now(),
   };
 }
@@ -153,7 +158,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function deserializeScene(raw: unknown): PersistedScene | null {
   if (!isRecord(raw)) return null;
 
-  if (raw.version !== 1) return null;
+  if (raw.version !== 1 && raw.version !== 2) return null;
 
   const nodes = Array.isArray(raw.nodes)
     ? (raw.nodes as KnowledgeNode[]).filter(
@@ -187,13 +192,23 @@ export function deserializeScene(raw: unknown): PersistedScene | null {
     ? (vc.semanticZoom as SemanticZoomLevel)
     : "entity";
 
+  // Provenance maps were added in version 2; v1 scenes migrate with empty maps.
+  const nodeSources = isRecord(raw.nodeSources)
+    ? (raw.nodeSources as Record<string, SourceRef>)
+    : {};
+  const edgeSources = isRecord(raw.edgeSources)
+    ? (raw.edgeSources as Record<string, SourceRef>)
+    : {};
+
   return {
-    version: 1,
+    version: 2,
     nodes,
     edges,
     positions,
     viewConfig: { type, semanticZoom },
     communityLabels,
+    nodeSources,
+    edgeSources,
     savedAt: typeof raw.savedAt === "number" ? raw.savedAt : Date.now(),
   };
 }

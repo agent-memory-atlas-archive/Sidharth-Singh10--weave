@@ -17,6 +17,7 @@ import type {
   KnowledgeNode,
   PersistedScene,
   SessionMeta,
+  SourceRef,
   ViewConfig,
   WeaveFlowNode,
   XYPosition,
@@ -38,6 +39,10 @@ interface GraphState {
   viewConfig: ViewConfig;
   /** Community labels keyed by sorted member-id signature. */
   communityLabels: Record<string, string>;
+  /** Provenance: nodeId -> originating note (or manual creation). */
+  nodeSources: Record<string, SourceRef>;
+  /** Provenance: edgeId -> originating note (or manual creation). */
+  edgeSources: Record<string, SourceRef>;
   /** Advisory AI analysis of the graph (optional layer). */
   insights: OrganizeResult | null;
   insightsLoading: boolean;
@@ -77,6 +82,8 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
   ghostNode: null,
   viewConfig: { type: "default", semanticZoom: "entity" },
   communityLabels: {},
+  nodeSources: {},
+  edgeSources: {},
   insights: null,
   insightsLoading: false,
   status: "idle",
@@ -97,6 +104,8 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
         semanticZoom: scene.viewConfig.semanticZoom,
       },
       communityLabels: scene.communityLabels,
+      nodeSources: scene.nodeSources ?? {},
+      edgeSources: scene.edgeSources ?? {},
       freshIds: [],
       ghostNode: null,
       insights: null,
@@ -120,11 +129,26 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
 
       let knowledgeNodes = s.knowledgeNodes;
       let knowledgeEdges = s.knowledgeEdges;
+      let nodeSources = s.nodeSources;
+      let edgeSources = s.edgeSources;
       if (removedIds.length > 0) {
         const removed = new Set(removedIds);
         knowledgeNodes = s.knowledgeNodes.filter((n) => !removed.has(n.id));
         knowledgeEdges = s.knowledgeEdges.filter(
           (e) => !removed.has(e.source) && !removed.has(e.target)
+        );
+        nodeSources = Object.fromEntries(
+          Object.entries(s.nodeSources).filter(([id]) => !removed.has(id))
+        );
+        edgeSources = Object.fromEntries(
+          Object.entries(s.edgeSources).filter(
+            ([id]) =>
+              !s.knowledgeEdges.some(
+                (e) =>
+                  e.id === id &&
+                  (removed.has(e.source) || removed.has(e.target))
+              )
+          )
         );
       }
 
@@ -136,7 +160,7 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
         }
       }
 
-      return { knowledgeNodes, knowledgeEdges, positions };
+      return { knowledgeNodes, knowledgeEdges, positions, nodeSources, edgeSources };
     }),
 
   onEdgesChange: (changes) =>
@@ -146,8 +170,12 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
         .map((c) => c.id);
       if (removedIds.length === 0) return s;
       const removed = new Set(removedIds);
+      const edgeSources = Object.fromEntries(
+        Object.entries(s.edgeSources).filter(([id]) => !removed.has(id))
+      );
       return {
         knowledgeEdges: s.knowledgeEdges.filter((e) => !removed.has(e.id)),
+        edgeSources,
       };
     }),
 
@@ -164,7 +192,13 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
         target: conn.target,
         relation: "related to",
       };
-      return { knowledgeEdges: [...s.knowledgeEdges, edge] };
+      return {
+        knowledgeEdges: [...s.knowledgeEdges, edge],
+        edgeSources: {
+          ...s.edgeSources,
+          [edge.id]: { note: null, createdAt: Date.now() },
+        },
+      };
     }),
 
   renameNode: (id, label) =>
@@ -278,10 +312,19 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
           layout
         );
 
+        // Provenance: record which note produced each new node/edge.
+        const source: SourceRef = { note: trimmed, createdAt: Date.now() };
+        const nodeSources = { ...state.nodeSources };
+        for (const id of result.newIds) nodeSources[id] = source;
+        const edgeSources = { ...state.edgeSources };
+        for (const id of result.newEdgeIds) edgeSources[id] = source;
+
         return {
           knowledgeNodes: result.nodes,
           knowledgeEdges: result.edges,
           positions: { ...state.positions, ...result.positions },
+          nodeSources,
+          edgeSources,
           freshIds: result.newIds,
           ghostNode: null,
           status: "idle" as const,

@@ -170,6 +170,10 @@ pub struct ExtractTrace {
     pub estimated_tokens: i64,
     /// Deepest hop actually included in the graph context.
     pub max_hops: usize,
+    /// True when a semantic (embedding) layer contributed to subgraph selection.
+    pub semantic_enabled: bool,
+    /// Labels selected primarily via semantic similarity (no lexical hit).
+    pub semantic_anchors: Vec<String>,
     pub extractor_version: String,
 }
 
@@ -183,14 +187,28 @@ pub async fn extract_delta(
 
 /// The real extraction pipeline plus a full trace of the LLM interaction.
 /// `extract_delta` shares this implementation, so the trace reflects exactly
-/// what a live ingest sends and receives.
+/// what a live ingest sends and receives. Lexical-only subgraph selection.
 pub async fn extract_delta_traced(
     client: &OpenCodeClient,
     req: &IngestRequest,
 ) -> (GraphDelta, Option<TokenUsage>, ExtractTrace) {
+    extract_delta_traced_with_embedder(client, req, None).await
+}
+
+/// [`extract_delta_traced`] with an optional embedder: when a semantically
+/// meaningful embedder is supplied, the bounded subgraph is selected with a
+/// hybrid lexical + semantic score. Stub embedders fall back to lexical-only.
+pub async fn extract_delta_traced_with_embedder(
+    client: &OpenCodeClient,
+    req: &IngestRequest,
+    embedder: Option<&dyn crate::embed::Embedder>,
+) -> (GraphDelta, Option<TokenUsage>, ExtractTrace) {
     // Bound the context: only the subgraph relevant to the note reaches the
     // LLM. Dedup/ID assignment below still uses the FULL request graph.
-    let sel = crate::subgraph::select_relevant_subgraph(&req.text, &req.nodes, &req.edges);
+    let sel = match embedder {
+        Some(e) => crate::subgraph::select_relevant_subgraph_semantic(e, &req.text, &req.nodes, &req.edges),
+        None => crate::subgraph::select_relevant_subgraph(&req.text, &req.nodes, &req.edges),
+    };
 
     if client.available() {
         match extract_with_llm(client, req, &sel).await {
@@ -215,6 +233,8 @@ pub async fn extract_delta_traced(
         omitted_edge_count: sel.omitted_edge_count,
         estimated_tokens: sel.estimated_tokens,
         max_hops: sel.max_hops,
+        semantic_enabled: sel.semantic_enabled,
+        semantic_anchors: sel.semantic_anchors.clone(),
         extractor_version: EXTRACTOR_VERSION.to_string(),
     };
     (extract_mock(req), None, mock_trace)
@@ -272,6 +292,8 @@ async fn extract_with_llm(
         omitted_edge_count: sel.omitted_edge_count,
         estimated_tokens: sel.estimated_tokens,
         max_hops: sel.max_hops,
+        semantic_enabled: sel.semantic_enabled,
+        semantic_anchors: sel.semantic_anchors.clone(),
         extractor_version: EXTRACTOR_VERSION.to_string(),
     };
     Ok((delta, trace))

@@ -22,6 +22,7 @@ import { WeaveNode } from "./WeaveNode";
 import { InputDock } from "./InputDock";
 import { CanvasHeader } from "./CanvasHeader";
 import { InsightsPanel } from "./InsightsPanel";
+import { SourceInspector } from "./SourceInspector";
 
 const nodeTypes = { weave: WeaveNode };
 
@@ -98,6 +99,7 @@ function Flow() {
       )}
 
       <CanvasHeader />
+      <SourceInspector />
       <InsightsPanel />
       <InputDock />
     </div>

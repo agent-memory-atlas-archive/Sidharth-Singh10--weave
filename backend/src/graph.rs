@@ -21,7 +21,7 @@ use crate::state::AppState;
 use crate::usage::{self, UsageRecord};
 use weave_core::models::{
     GraphDelta, IngestRequest, LabelCommunityRequest, LabelCommunityResult, OrganizeRequest,
-    OrganizeResult, SearchRequest, SearchResult,
+    OrganizeResult, SearchRequest,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -143,7 +143,9 @@ async fn ingest(
         )));
     }
     let start = std::time::Instant::now();
-    let (delta, usage) = weave_core::extract::extract_delta(&state.llm, &req).await;
+    let (delta, usage, _trace) =
+        weave_core::extract::extract_delta_traced_with_embedder(&state.llm, &req, Some(state.embedder.as_ref()))
+            .await;
     record_usage(&state, &user, "graph.ingest", usage, start, 200).await;
     Ok(Json(delta))
 }
@@ -163,11 +165,62 @@ async fn search_graph(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Json(req): Json<SearchRequest>,
-) -> Result<Json<SearchResult>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let start = std::time::Instant::now();
-    let (result, usage) = crate::organize::search(&state.llm, &req).await;
+    let semantic = semantic_candidates(state.embedder.as_ref(), &req);
+    let (result, usage) = crate::organize::search(&state.llm, &req, &semantic).await;
     record_usage(&state, &user, "graph.search", usage, start, 200).await;
-    Ok(Json(result))
+    Ok(Json(serde_json::json!({
+        "matches": result.matches,
+        "rationale": result.rationale,
+        "semantic": semantic,
+    })))
+}
+
+/// Embed the query + each node label in the request and return the labels
+/// most similar to the query (explainable semantic candidates). Empty when
+/// the embedder is not semantically meaningful.
+fn semantic_candidates(
+    embedder: &dyn weave_core::embed::Embedder,
+    req: &SearchRequest,
+) -> Vec<serde_json::Value> {
+    if !embedder.is_semantic() {
+        return vec![];
+    }
+    let Ok(query_vec) = embedder.embed(&req.query) else {
+        return vec![];
+    };
+    let mut scored: Vec<(String, f32)> = req
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            embedder
+                .embed(&n.label)
+                .ok()
+                .map(|v| (n.label.clone(), cosine_similarity(&query_vec, &v)))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+        .into_iter()
+        .filter(|(_, sim)| *sim >= 0.4)
+        .take(10)
+        .map(|(label, similarity)| {
+            serde_json::json!({ "label": label, "similarity": similarity })
+        })
+        .collect()
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    dot / (na.sqrt() * nb.sqrt()).max(1e-6)
 }
 
 async fn label_community_graph(
@@ -259,6 +312,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(config),
             llm: std::sync::Arc::new(OpenCodeClient::from_env()),
+            embedder: std::sync::Arc::new(weave_core::embed::StubEmbedder),
             db: pool.clone(),
             redis: redis.clone(),
             oidc: std::sync::Arc::new(MockOidc::new(

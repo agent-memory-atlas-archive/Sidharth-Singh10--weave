@@ -45,11 +45,12 @@ async fn ingest_pipeline_persists_graph_with_provenance() {
     let llm = Arc::new(OpenCodeClient::mock());
     let embedder = stub_embedder();
 
+    let tag = uuid::Uuid::new_v4().simple().to_string();
     let result = ingest::ingest_note(
         &pool,
         &llm,
         &embedder,
-        "PerOXO uses Rust and ScyllaDB.",
+        &format!("PerOXO uses Rust and ScyllaDB. ({tag})"),
         "note",
         &["work".to_string()],
         "user",
@@ -77,7 +78,7 @@ async fn ingest_pipeline_persists_graph_with_provenance() {
         .await
         .unwrap()
         .expect("note");
-    assert_eq!(note.content, "PerOXO uses Rust and ScyllaDB.");
+    assert_eq!(note.content, format!("PerOXO uses Rust and ScyllaDB. ({tag})"));
     assert_eq!(note.tags, vec!["work"]);
 
     // The note was embedded (pgvector column written).
@@ -112,7 +113,7 @@ async fn ingest_pipeline_persists_graph_with_provenance() {
         &pool,
         &llm,
         &embedder,
-        "PerOXO uses Rust and ScyllaDB.",
+        &format!("PerOXO uses Rust and ScyllaDB. ({tag})"),
         "note",
         &[],
         "user",
@@ -610,11 +611,12 @@ async fn idempotency_audit_and_supersession_v5() {
     let llm = Arc::new(OpenCodeClient::mock());
     let embedder = stub_embedder();
 
+    let content = format!("Hogwarts has four houses. ({})", uuid::Uuid::new_v4().simple());
     let first = ingest::ingest_note(
         &pool,
         &llm,
         &embedder,
-        "Hogwarts has four houses.",
+        &content,
         "note",
         &[],
         "user",
@@ -633,7 +635,7 @@ async fn idempotency_audit_and_supersession_v5() {
         &pool,
         &llm,
         &embedder,
-        "Hogwarts has four houses.",
+        &content,
         "note",
         &[],
         "user",
@@ -654,24 +656,38 @@ async fn idempotency_audit_and_supersession_v5() {
     assert_eq!(note.metadata["origin"], "test");
 
     // Audit rows were written for note + claim creation by the acting agent.
-    let created: Vec<(String, String)> = sqlx::query_as(
-        "SELECT action, actor FROM audit_log WHERE target_id = $1 AND action IN ('note.created','claim.created')",
+    // note.created is keyed by the note id; claim.created by the claim id.
+    let note_audit: Vec<(String, String)> = sqlx::query_as(
+        "SELECT action, actor FROM audit_log WHERE target_id = $1 AND action = 'note.created'",
     )
     .bind(first.note_id.to_string())
     .fetch_all(&pool)
     .await
     .unwrap();
     assert!(
-        created.iter().any(|(a, _)| a == "note.created"),
-        "audit must record note creation: {created:?}"
+        note_audit.iter().any(|(a, _)| a == "note.created"),
+        "audit must record note creation: {note_audit:?}"
     );
     assert!(
-        created.iter().any(|(a, _)| a == "claim.created"),
-        "audit must record claim creation: {created:?}"
+        note_audit.iter().all(|(_, actor)| actor == "agent-42"),
+        "audit actor is the agent: {note_audit:?}"
+    );
+
+    let claim_ids: Vec<String> = first.claim_ids.iter().map(|id| id.to_string()).collect();
+    let claim_audit: Vec<(String, String)> = sqlx::query_as(
+        "SELECT action, actor FROM audit_log WHERE action = 'claim.created' AND target_id = ANY($1)",
+    )
+    .bind(&claim_ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !claim_audit.is_empty(),
+        "audit must record claim creation for {claim_ids:?}"
     );
     assert!(
-        created.iter().all(|(_, actor)| actor == "agent-42"),
-        "audit actor is the agent: {created:?}"
+        claim_audit.iter().all(|(_, actor)| actor == "agent-42"),
+        "audit actor is the agent: {claim_audit:?}"
     );
 
     // Supersession: a corrected claim marks the original superseded.

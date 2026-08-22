@@ -7,8 +7,10 @@ Weave is an AI-powered knowledge graph application. You type plain-language note
 ## Features
 
 - **Automatic graph construction** — enter a note, get nodes and edges. Existing concepts are recognized and reused, never duplicated.
-- **Bounded LLM context (V1)** — only the subgraph relevant to a note reaches the extraction LLM (lexical anchors → 2-hop neighborhood, capped at 64 nodes / 256 edges / an estimated-token budget), so ingest cost doesn't scale with graph size.
-- **Admin pipeline tracer** — an admin-only `/admin/pipeline` page shows every ingest stage end-to-end, including the exact prompt sent to the LLM, the raw response, and the subgraph that was selected.
+- **Bounded LLM context (V1)** — only the subgraph relevant to a note reaches the extraction LLM (lexical + optional semantic anchors → 2-hop neighborhood, capped at 64 nodes / 256 edges / an estimated-token budget), so ingest cost doesn't scale with graph size.
+- **Web semantic retrieval** — weave-api embeds the request graph on-the-fly (local ONNX): ingest grounding and `/api/graph/search` use hybrid lexical + embedding ranking with explainable similarity; a search box in the canvas header shows ranked results and jumps to nodes.
+- **Graph provenance** — every node/edge records the note that created it (persisted per session); the node inspector shows its originating note and time.
+- **Admin pipeline tracer** — an admin-only `/admin/pipeline` page shows every ingest stage end-to-end, including the exact prompt sent to the LLM, the raw response, and the subgraph (lexical + semantic anchors) that was selected.
 - **Infinite canvas** — the graph grows with your knowledge (React Flow).
 - **Interactive editing** — drag, rename (double-click), delete, and connect nodes manually.
 - **Accounts & identity** — Google OAuth login, persistent users/roles, server-side sessions (HttpOnly cookie), bootstrap admin.

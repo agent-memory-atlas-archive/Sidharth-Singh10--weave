@@ -102,7 +102,11 @@ pub async fn label_community(
     }
 }
 
-pub async fn search(client: &OpenCodeClient, req: &SearchRequest) -> (SearchResult, Option<TokenUsage>) {
+pub async fn search(
+    client: &OpenCodeClient,
+    req: &SearchRequest,
+    semantic_hints: &[serde_json::Value],
+) -> (SearchResult, Option<TokenUsage>) {
     if !client.available() {
         return (
             SearchResult {
@@ -113,10 +117,21 @@ pub async fn search(client: &OpenCodeClient, req: &SearchRequest) -> (SearchResu
         );
     }
 
+    let hint_str = if semantic_hints.is_empty() {
+        "(none)".to_string()
+    } else {
+        semantic_hints
+            .iter()
+            .filter_map(|h| h["label"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     let user = format!(
-        "Graph:\n{}\n\nQuestion: {}",
+        "Graph:\n{}\n\nQuestion: {}\n\nSemantic hints (likely relevant labels): {}",
         graph_description(&req.nodes, &req.edges),
-        req.query
+        req.query,
+        hint_str
     );
 
     let (seeds, rationale, usage) = match client.chat_json(SEARCH_PROMPT, &user).await {

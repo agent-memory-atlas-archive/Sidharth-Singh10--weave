@@ -99,6 +99,13 @@ export interface SessionMeta {
   updatedAt: number;
 }
 
+/** Provenance: which note (or manual action) produced a node/edge. */
+export interface SourceRef {
+  /** The originating note text; null for manually-created items. */
+  note: string | null;
+  createdAt: number;
+}
+
 /** The persistable subset of ViewConfig (transient selection is dropped). */
 export interface PersistedViewConfig {
   type: ViewType;
@@ -108,11 +115,15 @@ export interface PersistedViewConfig {
 /** One session's serialized scene: the knowledge graph + view preferences. */
 export interface PersistedScene {
   /** Schema version; migrate() bumps this on breaking shape changes. */
-  version: 1;
+  version: 2;
   nodes: KnowledgeNode[];
   edges: KnowledgeEdge[];
   positions: Record<string, XYPosition>;
   viewConfig: PersistedViewConfig;
   communityLabels: Record<string, string>;
+  /** nodeId -> originating note (provenance). */
+  nodeSources: Record<string, SourceRef>;
+  /** edgeId -> originating note (provenance). */
+  edgeSources: Record<string, SourceRef>;
   savedAt: number;
 }

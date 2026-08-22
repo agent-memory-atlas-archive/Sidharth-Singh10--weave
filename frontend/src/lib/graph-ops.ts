@@ -11,6 +11,8 @@ export interface ApplyDeltaResult {
   edges: KnowledgeEdge[];
   /** ids of nodes created in this pass (used for the "fresh" pulse). */
   newIds: string[];
+  /** ids of edges created in this pass. */
+  newEdgeIds: string[];
   /** positions assigned to the new nodes. */
   positions: Record<string, XYPosition>;
 }
@@ -78,6 +80,7 @@ export function applyGraphDelta(
   const newNodes: KnowledgeNode[] = [];
   const newEdges: KnowledgeEdge[] = [];
   const newIds: string[] = [];
+  const newEdgeIds: string[] = [];
   const positions: Record<string, XYPosition> = {};
 
   // Generate a stable `node-{slug}` id, deduping against existing ids.
@@ -136,6 +139,7 @@ export function applyGraphDelta(
         target: tgtId,
         relation: e.relation,
       });
+      newEdgeIds.push(edgeId);
       parentChildCount.set(srcId, (parentChildCount.get(srcId) ?? 0) + 1);
     }
   }
@@ -166,6 +170,7 @@ export function applyGraphDelta(
     nodes: [...nodes, ...newNodes],
     edges: [...edges, ...newEdges],
     newIds,
+    newEdgeIds,
     positions,
   };
 }

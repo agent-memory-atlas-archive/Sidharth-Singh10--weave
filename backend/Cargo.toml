@@ -26,5 +26,10 @@ axum-extra = { version = "0.12.6", features = ["cookie"] }
 time = "0.3"
 weave-core = { path = "../crates/weave-core" }
 
+[features]
+default = []
+# Local ONNX embeddings (fastembed) for semantic retrieval on the web path.
+embedding = ["weave-core/embedding"]
+
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

@@ -123,6 +123,30 @@ export async function labelCommunity(nodes: string[]): Promise<string> {
   return data.label;
 }
 
+export interface SemanticMatch {
+  label: string;
+  similarity: number;
+}
+
+export interface SearchResponse {
+  matches: string[];
+  rationale: string;
+  /** Explainable semantic candidates (embedding similarity). */
+  semantic: SemanticMatch[];
+}
+
+/** Semantic + LLM search over the graph (hybrid). */
+export async function searchGraph(
+  query: string,
+  nodes: { label: string; kind: string }[],
+  edges: { source_label: string; target_label: string; relation: string }[]
+): Promise<SearchResponse> {
+  return request<SearchResponse>("/api/graph/search", {
+    method: "POST",
+    body: JSON.stringify({ query, nodes, edges }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Auth API
 // ---------------------------------------------------------------------------

@@ -74,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env();
     let llm = llm::OpenCodeClient::from_env();
+    let embedder =
+        weave_core::embed::build_embedder(std::env::var("WEAVE_API_EMBEDDING_MODEL").ok().as_deref());
     let db = db::connect(&config.database_url).await?;
     let redis = redis_store::Redis::connect(&config.redis_url).await?;
 
@@ -118,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         config: Arc::new(config),
         llm: Arc::new(llm),
+        embedder,
         db,
         redis,
         oidc,

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { Sparkle } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
+import { MagnifyingGlass, Sparkle, X } from "@phosphor-icons/react";
 import { useGraphStore } from "@/lib/store";
+import { searchGraph, type SearchResponse } from "@/lib/api";
 import { useCommunityLabels } from "@/lib/useCommunityLabels";
 import { usePersistenceStatus } from "@/lib/usePersistenceStatus";
 import { TOPIC_COLORS } from "@/lib/graph-projection";
@@ -48,6 +49,8 @@ export function CanvasHeader() {
       <span className="text-sm font-semibold tracking-tight text-foreground">
         Weave
       </span>
+
+      <GraphSearch />
 
       {isTopic && topics.length > 0 && (
         <div className="pointer-events-none flex min-w-0 items-center gap-1.5 overflow-x-auto">
@@ -179,6 +182,148 @@ function RestoredSessionToast() {
       <div className="pointer-events-auto rounded-lg border border-line bg-surface px-3 py-1.5 text-xs text-muted shadow-lg">
         Restored <span className="font-medium text-foreground">{restoredSession}</span>
       </div>
+    </div>
+  );
+}
+
+/** Hybrid semantic + LLM search over the graph, with explainable results. */
+function GraphSearch() {
+  const nodes = useGraphStore((s) => s.knowledgeNodes);
+  const edges = useGraphStore((s) => s.knowledgeEdges);
+  const selectNode = useGraphStore((s) => s.selectNode);
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState<SearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  async function run(e?: React.FormEvent) {
+    e?.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    setLoading(true);
+    try {
+      const res = await searchGraph(
+        q,
+        nodes.map((n) => ({ label: n.label, kind: n.kind })),
+        edges.map((e) => ({
+          source_label:
+            nodes.find((n) => n.id === e.source)?.label ?? e.source,
+          target_label:
+            nodes.find((n) => n.id === e.target)?.label ?? e.target,
+          relation: e.relation,
+        }))
+      );
+      setResult(res);
+      setOpen(true);
+    } catch {
+      setResult(null);
+      setOpen(false);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function jumpTo(label: string) {
+    const node = nodes.find(
+      (n) => n.label.toLowerCase() === label.toLowerCase()
+    );
+    if (node) {
+      selectNode(node.id);
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  const highlight = new Set((result?.matches ?? []).map((m) => m.toLowerCase()));
+
+  return (
+    <div className="pointer-events-auto relative w-64">
+      <form onSubmit={run} className="relative">
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (!e.target.value) setOpen(false);
+          }}
+          placeholder="Search the graph…"
+          className="w-full rounded-lg border border-line bg-background/80 py-1 pl-7 pr-7 text-xs text-foreground outline-none transition-colors focus:border-accent"
+        />
+        <MagnifyingGlass
+          size={13}
+          className="absolute left-2 top-1/2 -translate-y-1/2 text-faint"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setOpen(false);
+            }}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-faint hover:text-foreground"
+            aria-label="Clear search"
+          >
+            <X size={12} />
+          </button>
+        )}
+      </form>
+
+      {open && result && (
+        <div className="absolute left-0 right-0 top-full mt-1 max-h-72 overflow-auto rounded-lg border border-line bg-surface shadow-lg">
+          {loading ? (
+            <p className="px-3 py-2 text-xs text-faint">Searching…</p>
+          ) : (
+            <>
+              {result.rationale && (
+                <p className="border-b border-line px-3 py-1.5 text-[11px] italic text-muted">
+                  {result.rationale}
+                </p>
+              )}
+              {(result.matches.length > 0 || result.semantic.length > 0) ? (
+                <>
+                  <ul className="py-1">
+                    {result.matches.map((m) => (
+                      <li key={m}>
+                        <button
+                          onClick={() => jumpTo(m)}
+                          className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-surface-2"
+                        >
+                          <span className="truncate">{m}</span>
+                          {highlight.has(m.toLowerCase()) && (
+                            <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
+                              match
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {result.semantic.length > 0 && (
+                    <div className="border-t border-line px-3 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wide text-faint">
+                        Semantically similar
+                      </p>
+                      {result.semantic.map((s) => (
+                        <button
+                          key={s.label}
+                          onClick={() => jumpTo(s.label)}
+                          className="mt-0.5 flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-xs text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
+                        >
+                          <span className="truncate">{s.label}</span>
+                          <span className="shrink-0 font-mono text-[10px] text-faint">
+                            {s.similarity.toFixed(2)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="px-3 py-2 text-xs text-faint">No matches.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

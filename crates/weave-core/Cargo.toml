@@ -11,6 +11,13 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls", 
 regex = "1.13.1"
 anyhow = "1.0.104"
 tracing = "0.1"
+sha2 = "0.11.0"
+hex = "0.4"
+fastembed = { version = "5", features = ["hf-hub"], optional = true }
+
+[features]
+default = []
+embedding = ["dep:fastembed"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread"] }

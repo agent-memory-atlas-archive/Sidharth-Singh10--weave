@@ -24,7 +24,6 @@ use crate::error::{ApiError, ApiErrorKind};
 use crate::ratelimit;
 use crate::state::AppState;
 use crate::usage::{self, UsageRecord};
-use weave_core::extract::extract_delta_traced;
 use weave_core::models::IngestRequest;
 
 pub fn routes() -> Router<AppState> {
@@ -236,7 +235,9 @@ async fn ingest_trace(
 
     // -- LLM extraction ----------------------------------------------------
     let start = Instant::now();
-    let (delta, usage, trace) = extract_delta_traced(&state.llm, &req).await;
+    let (delta, usage, trace) =
+        weave_core::extract::extract_delta_traced_with_embedder(&state.llm, &req, Some(state.embedder.as_ref()))
+            .await;
     let extract_status = if trace.mock_fallback { "mock" } else { "ok" };
     stages.push(Stage {
         stage: "extract",
@@ -327,6 +328,7 @@ mod tests {
         let state = AppState {
             config: std::sync::Arc::new(config),
             llm: std::sync::Arc::new(OpenCodeClient::mock()),
+            embedder: std::sync::Arc::new(weave_core::embed::StubEmbedder),
             db: pool.clone(),
             redis,
             oidc: std::sync::Arc::new(MockOidc::new(

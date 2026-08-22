@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::embed::Embedder;
 use crate::models::{GraphEdge, GraphNode};
 
 /// Maximum number of matched nodes used as BFS seeds (independent entry
@@ -42,6 +43,60 @@ pub struct SubgraphSelection {
     pub estimated_tokens: i64,
     /// Deepest hop actually included in the selection.
     pub max_hops: usize,
+    /// True when a semantic (embedding) layer contributed to selection.
+    pub semantic_enabled: bool,
+    /// Labels selected primarily via semantic similarity (no lexical hit).
+    pub semantic_anchors: Vec<String>,
+}
+
+/// Per-label cosine similarity hints, computed once by the caller.
+type SemanticScores = HashMap<String, f32>;
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    let denom = (na.sqrt() * nb.sqrt()).max(1e-6);
+    dot / denom
+}
+
+/// Cosine similarity of every node label against `text` (only when the
+/// embedder is semantically meaningful). Embeds each label once per call.
+fn compute_semantic_scores(
+    embedder: &dyn Embedder,
+    text: &str,
+    nodes: &[GraphNode],
+) -> SemanticScores {
+    if !embedder.is_semantic() {
+        return HashMap::new();
+    }
+    let Ok(query) = embedder.embed(text) else {
+        return HashMap::new();
+    };
+    let mut scores = SemanticScores::new();
+    for node in nodes {
+        if let Ok(v) = embedder.embed(&node.label) {
+            scores.insert(node.label.to_lowercase(), cosine(&query, &v));
+        }
+    }
+    scores
+}
+
+/// Combined relevance score: lexical strength + semantic similarity.
+fn combined_score(strength: MatchStrength, similarity: Option<f32>) -> f64 {
+    let lexical = match strength {
+        MatchStrength::Exact => 1.0,
+        MatchStrength::WordOverlap => 0.9,
+        MatchStrength::Substring => 0.6,
+        MatchStrength::None => 0.0,
+    };
+    let semantic = similarity.unwrap_or(0.0) as f64 * 0.4;
+    lexical + semantic
 }
 
 /// Match strength of a label against the note's candidate terms.
@@ -168,13 +223,39 @@ fn degrees(nodes: &[GraphNode], edges: &[GraphEdge]) -> HashMap<String, usize> {
 }
 
 /// Select the subgraph of `nodes`/`edges` relevant to `text`, subject to the
-/// module budgets. Deterministic: ties break on lowercase label.
+/// module budgets. Lexical-only. Deterministic: ties break on lowercase label.
 pub fn select_relevant_subgraph(
     text: &str,
     nodes: &[GraphNode],
     edges: &[GraphEdge],
 ) -> SubgraphSelection {
+    select_with_hints(text, nodes, edges, &SemanticScores::new())
+}
+
+/// Semantic variant: combines lexical matching with embedding similarity when
+/// the embedder is semantically meaningful (stub → identical to the
+/// lexical-only path).
+pub fn select_relevant_subgraph_semantic(
+    embedder: &dyn Embedder,
+    text: &str,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+) -> SubgraphSelection {
+    let semantic = compute_semantic_scores(embedder, text, nodes);
+    select_with_hints(text, nodes, edges, &semantic)
+}
+
+/// Minimum cosine similarity for a node to count as a semantic match.
+const SEMANTIC_HIT_THRESHOLD: f32 = 0.45;
+
+fn select_with_hints(
+    text: &str,
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    semantic: &SemanticScores,
+) -> SubgraphSelection {
     let terms = candidate_terms(text);
+    let semantic_enabled = !semantic.is_empty();
 
     let deg = degrees(nodes, edges);
 
@@ -198,15 +279,18 @@ pub fn select_relevant_subgraph(
         strength.insert(key.clone(), match_strength(label, &terms));
     }
 
-    // Anchors: top MAX_ANCHORS matched nodes by (strength, degree) — the BFS
-    // seeds. All matched nodes are selected at hop 0 regardless of the cap.
-    let mut matched: Vec<&String> = node_keys
-        .iter()
-        .filter(|k| strength[*k] > MatchStrength::None)
-        .collect();
+    // Anchors: top MAX_ANCHORS matched nodes by combined score — the BFS
+    // seeds. "Matched" = lexical hit OR a strong semantic hit.
+    let is_matched = |key: &String| -> bool {
+        strength[key] > MatchStrength::None
+            || semantic.get(key).copied().unwrap_or(0.0) >= SEMANTIC_HIT_THRESHOLD
+    };
+    let mut matched: Vec<&String> = node_keys.iter().filter(|k| is_matched(k)).collect();
     matched.sort_by(|a, b| {
-        strength[*b]
-            .cmp(&strength[*a])
+        let sa = combined_score(strength[*a], semantic.get(*a).copied());
+        let sb = combined_score(strength[*b], semantic.get(*b).copied());
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| deg.get(*b).unwrap_or(&0).cmp(deg.get(*a).unwrap_or(&0)))
             .then_with(|| a.cmp(b))
     });
@@ -254,20 +338,17 @@ pub fn select_relevant_subgraph(
         }
     }
 
-    // Rank candidates: hop asc → strength desc → degree desc → label asc.
+    // Rank candidates: hop asc → combined score desc → degree desc → label.
     let mut ranked: Vec<&String> = node_keys
         .iter()
         .filter(|k| hop.contains_key(*k))
         .collect();
     ranked.sort_by(|a, b| {
+        let sa = combined_score(strength[*a], semantic.get(*a).copied());
+        let sb = combined_score(strength[*b], semantic.get(*b).copied());
         hop[*a]
             .cmp(&hop[*b])
-            .then_with(|| {
-                strength
-                    .get(*b)
-                    .unwrap_or(&MatchStrength::None)
-                    .cmp(strength.get(*a).unwrap_or(&MatchStrength::None))
-            })
+            .then_with(|| sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal))
             .then_with(|| deg.get(*b).unwrap_or(&0).cmp(deg.get(*a).unwrap_or(&0)))
             .then_with(|| a.cmp(b))
     });
@@ -339,6 +420,16 @@ pub fn select_relevant_subgraph(
     let node_count = sel_nodes.len();
     let edge_count = sel_edges.len();
 
+    // Labels selected without any lexical hit — semantic-only anchors.
+    let semantic_anchors: Vec<String> = sel_keys
+        .iter()
+        .filter(|k| {
+            strength.get(*k).map(|s| *s == MatchStrength::None).unwrap_or(true)
+                && semantic.contains_key(*k)
+        })
+        .map(|k| node_by_key[k].label.clone())
+        .collect();
+
     SubgraphSelection {
         nodes: sel_nodes,
         edges: sel_edges,
@@ -349,6 +440,8 @@ pub fn select_relevant_subgraph(
         omitted_edge_count: edges.len().saturating_sub(edge_count),
         estimated_tokens: ESTIMATED_TOKEN_CEILING - token_budget,
         max_hops: selected_hop,
+        semantic_enabled,
+        semantic_anchors,
     }
 }
 
@@ -363,12 +456,55 @@ fn edge_key(e: &GraphEdge) -> (String, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embed::Embedder;
 
     fn node(label: &str) -> GraphNode {
         GraphNode {
             id: None,
             label: label.to_string(),
             kind: String::new(),
+        }
+    }
+
+    /// Deterministic "semantic" embedder: synonym groups map to shared
+    /// dimensions, so similar-but-different words get high cosine similarity.
+    struct SynonymEncoder;
+
+    impl Embedder for SynonymEncoder {
+        fn is_semantic(&self) -> bool {
+            true
+        }
+
+        fn model_id(&self) -> &'static str {
+            "test-synonym"
+        }
+
+        fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+            let mut v = vec![0f32; 128];
+            let groups: &[(&[&str], usize)] = &[
+                (&["sorcery", "magic", "wizardry", "witchcraft"], 5),
+                (&["school", "academy", "hogwarts"], 7),
+                (&["potions", "alchemy"], 11),
+            ];
+            for tok in text.split(|c: char| !c.is_alphanumeric()) {
+                let t = tok.to_lowercase();
+                if t.len() < 3 {
+                    continue;
+                }
+                let dim = groups
+                    .iter()
+                    .find(|(words, _)| words.contains(&t.as_str()))
+                    .map(|(_, d)| *d)
+                    .unwrap_or_else(|| {
+                        (t.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64)) % 118) as usize + 10
+                    });
+                v[dim] += 1.0;
+            }
+            let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+            for x in &mut v {
+                *x /= n;
+            }
+            Ok(v)
         }
     }
 
@@ -559,5 +695,31 @@ mod tests {
         );
         assert_eq!(sel.max_hops, 1);
         assert_eq!(sel.subgraph_node_count, MAX_NODES);
+    }
+
+    #[test]
+    fn stub_embedder_skips_semantic_layer() {
+        let nodes = vec![node("Harry Potter"), node("Quantum Physics")];
+        let sel = select_relevant_subgraph_semantic(&crate::embed::StubEmbedder, "Harry is here.", &nodes, &[]);
+        assert!(!sel.semantic_enabled, "stub must disable the semantic layer");
+        assert!(sel.semantic_anchors.is_empty());
+        assert_eq!(labels(&sel), vec!["Harry Potter"]);
+    }
+
+    #[test]
+    fn semantic_only_anchor_selected() {
+        // "sorcery" and "magic" share a synonym dimension -> high similarity,
+        // but "Magic" has no lexical hit in the note text.
+        let nodes = vec![node("Magic"), node("Quantum Physics")];
+        let sel = select_relevant_subgraph_semantic(&SynonymEncoder, "Harry is learning sorcery.", &nodes, &[]);
+        assert!(sel.semantic_enabled);
+        let l = labels(&sel);
+        assert!(l.contains(&"Magic".to_string()), "semantic anchor selected: {l:?}");
+        assert!(!l.contains(&"Quantum Physics".to_string()), "unrelated omitted");
+        assert!(
+            sel.semantic_anchors.iter().any(|a| a == "Magic"),
+            "semantic_anchors must explain the selection: {:?}",
+            sel.semantic_anchors
+        );
     }
 }
