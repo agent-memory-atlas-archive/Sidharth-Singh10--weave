@@ -45,8 +45,9 @@ journal owns op ids, revisions, capability checks, and audit entries.
 - The header badge shows the document suffix (`CG xxxxxxxx`); click it to open the Journal panel,
   which shows/copies the full document id, lists recent turns, approves `approval_required` ops
   with `cap_human`, and undoes a turn with `cap_undo`. An agent targets the full id.
-- `next.config.ts` proxies `/common-ground/*` to `COMMON_GROUND_URL` (default
-  `http://127.0.0.1:8787`). Set `NEXT_PUBLIC_COMMON_GROUND_URL` to bypass the proxy.
+- `frontend/src/app/common-ground/[...path]/route.ts` streams `/common-ground/*` to
+  `COMMON_GROUND_URL` (default `http://127.0.0.1:8787`), including the SSE journal. Set
+  `NEXT_PUBLIC_COMMON_GROUND_URL` to bypass the proxy.
 - The `cap_graph` capability is bound to `weave-agent`. Create/update/view ops apply directly;
   node/edge deletes and merges require a one-shot human approval.
 
