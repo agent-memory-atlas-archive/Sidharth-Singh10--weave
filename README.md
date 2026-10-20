@@ -42,9 +42,9 @@ journal owns op ids, revisions, capability checks, and audit entries.
 
 - `frontend/src/lib/common-ground.ts` connects to `/common-ground/api/stream`, applies
   `graph.*` envelopes to the Zustand graph, computes inverses, and posts acks.
-- The header badge shows the document id (`CG xxxxxxxx`); click it to open the Journal panel,
-  which lists recent turns, approves `approval_required` ops with `cap_human`, and undoes a turn
-  with `cap_undo`. An agent targets the badge id.
+- The header badge shows the document suffix (`CG xxxxxxxx`); click it to open the Journal panel,
+  which shows/copies the full document id, lists recent turns, approves `approval_required` ops
+  with `cap_human`, and undoes a turn with `cap_undo`. An agent targets the full id.
 - `next.config.ts` proxies `/common-ground/*` to `COMMON_GROUND_URL` (default
   `http://127.0.0.1:8787`). Set `NEXT_PUBLIC_COMMON_GROUND_URL` to bypass the proxy.
 - The `cap_graph` capability is bound to `weave-agent`. Create/update/view ops apply directly;
