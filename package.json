@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev -w frontend",
     "build": "npm run build -w frontend",
-    "lint": "npm run lint -w frontend"
+    "lint": "npm run lint -w frontend",
+    "cg:smoke": "node scripts/cg-smoke.mjs"
   }
 }

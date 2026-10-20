@@ -35,6 +35,30 @@ Weave is an AI-powered knowledge graph application. You type plain-language note
   - **Graph flavors** — one knowledge graph, many projections. The **Topic view** tints nodes by kind.
   - **AI suggestions** — an optional, advisory panel surfaces semantic groups, missing edges, and duplicates.
 
+## Common Ground adapter
+
+Weave is the second Common Ground adapter. The knowledge graph stays client-owned; the Rust
+journal owns op ids, revisions, capability checks, and audit entries.
+
+- `frontend/src/lib/common-ground.ts` connects to `/common-ground/api/stream`, applies
+  `graph.*` envelopes to the Zustand graph, computes inverses, and posts acks.
+- The header badge shows the document id (`CG xxxxxxxx`); an agent targets that id.
+- `next.config.ts` proxies `/common-ground/*` to `COMMON_GROUND_URL` (default
+  `http://127.0.0.1:8787`). Set `NEXT_PUBLIC_COMMON_GROUND_URL` to bypass the proxy.
+- The `cap_graph` capability is bound to `weave-agent`. Create/update/view ops apply directly;
+  node/edge deletes and merges require a one-shot human approval.
+
+Ops: `node.create`, `node.update`, `node.delete`, `edge.create`, `edge.update`, `edge.delete`,
+`merge`, `view.set`.
+
+```sh
+# With the Weave canvas open and its CG badge visible:
+DOC_ID=weave_... node scripts/cg-smoke.mjs
+```
+
+The script mints a `cap_graph` token and submits one node.create envelope; the canvas should
+show the new node after it acks.
+
 ## Architecture
 
 ```

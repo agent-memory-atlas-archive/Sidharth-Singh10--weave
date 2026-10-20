@@ -10,6 +10,7 @@ import { TOPIC_COLORS } from "@/lib/graph-projection";
 import type { ViewType } from "@/lib/graph-types";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { SessionSwitcher } from "./SessionSwitcher";
+import { CommonGroundBadge } from "./CommonGroundBadge";
 
 const VIEW_LABELS: Record<ViewType, string> = {
   default: "Default",
@@ -46,9 +47,12 @@ export function CanvasHeader() {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-4 border-b border-line bg-surface/80 px-4 py-2 backdrop-blur-md">
-      <span className="text-sm font-semibold tracking-tight text-foreground">
-        Weave
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold tracking-tight text-foreground">
+          Weave
+        </span>
+        <CommonGroundBadge />
+      </div>
 
       <GraphSearch />
 

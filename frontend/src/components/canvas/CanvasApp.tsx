@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -17,6 +17,7 @@ import { useGraphStore } from "@/lib/store";
 import { useRenderGraph } from "@/lib/graph-projection";
 import { useSemanticZoom } from "@/lib/useSemanticZoom";
 import { useSessionPersistence } from "@/lib/useSessionPersistence";
+import { startCommonGroundBridge } from "@/lib/common-ground";
 import type { WeaveFlowNode } from "@/lib/graph-types";
 import { WeaveNode } from "./WeaveNode";
 import { InputDock } from "./InputDock";
@@ -108,6 +109,7 @@ function Flow() {
 
 export function CanvasApp() {
   useSessionPersistence();
+  useEffect(() => startCommonGroundBridge(), []);
   return (
     <ReactFlowProvider>
       <Flow />
