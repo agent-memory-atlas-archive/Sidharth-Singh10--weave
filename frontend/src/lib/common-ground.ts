@@ -17,10 +17,10 @@ import type {
  */
 
 const DOC_KEY = "weave.commonGroundDocId";
-const BASE = (process.env.NEXT_PUBLIC_COMMON_GROUND_URL ?? "/common-ground").replace(
-  /\/+$/,
-  "",
-);
+export const COMMON_GROUND_BASE = (
+  process.env.NEXT_PUBLIC_COMMON_GROUND_URL ?? "/common-ground"
+).replace(/\/+$/, "");
+const BASE = COMMON_GROUND_BASE;
 
 type GraphOp =
   | { op: "node.create"; id: string; label: string; kind: string; position?: XYPosition }
