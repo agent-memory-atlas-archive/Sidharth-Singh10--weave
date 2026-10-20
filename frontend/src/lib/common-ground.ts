@@ -91,14 +91,21 @@ function applyOp(raw: unknown): Result {
       if (state.knowledgeNodes.some((node) => node.id === op.id)) {
         return { ok: false, warnings: [`node ${op.id} already exists`] };
       }
-      useGraphStore.setState((s) => ({
-        knowledgeNodes: [...s.knowledgeNodes, { id: op.id, label: op.label, kind: op.kind }],
-        positions: op.position ? { ...s.positions, [op.id]: op.position } : s.positions,
-        nodeSources: {
-          ...s.nodeSources,
-          [op.id]: { note: null, createdAt: Date.now() },
-        },
-      }));
+      useGraphStore.setState((s) => {
+        const index = s.knowledgeNodes.length;
+        const angle = (Math.PI * 2 * index) / Math.max(index + 1, 3);
+        return {
+          knowledgeNodes: [...s.knowledgeNodes, { id: op.id, label: op.label, kind: op.kind }],
+          positions: {
+            ...s.positions,
+            [op.id]: op.position ?? { x: 260 * Math.cos(angle), y: 260 * Math.sin(angle) },
+          },
+          nodeSources: {
+            ...s.nodeSources,
+            [op.id]: { note: null, createdAt: Date.now() },
+          },
+        };
+      });
       return { ok: true, id: op.id };
     }
     case "node.update": {
