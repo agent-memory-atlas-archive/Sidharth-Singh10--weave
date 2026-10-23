@@ -42,6 +42,9 @@ journal owns op ids, revisions, capability checks, and audit entries.
 
 - `frontend/src/lib/common-ground.ts` connects to `/common-ground/api/stream`, applies
   `graph.*` envelopes to the Zustand graph, computes inverses, and posts acks.
+- Manual graph edits — rename, connect, delete — are recorded through
+  `frontend/src/lib/graph-record.ts` with `cap_human`, so they appear as human turns in the
+  Journal beside agent turns. Position-only drags and view changes are not journaled.
 - The header badge shows the document suffix (`CG xxxxxxxx`); click it to open the Journal panel,
   which shows/copies the full document id, lists recent turns, approves `approval_required` ops
   with `cap_human`, and undoes a turn with `cap_undo`. An agent targets the full id.
