@@ -9,6 +9,7 @@ import type {
 import { ingestNote, organizeGraph, ApiError } from "./api";
 import type { OrganizeResult } from "./api";
 import { applyGraphDelta } from "./graph-ops";
+import { recordHumanGraph, type GraphSnapshot } from "./graph-record";
 import { computeLayoutContext, relayout } from "./layout";
 import type {
   GhostNode,
@@ -74,6 +75,22 @@ interface GraphState {
 
 let idCounter = 0;
 
+function snapshot(): GraphSnapshot {
+  const state = useGraphStore.getState();
+  return {
+    nodes: structuredClone(state.knowledgeNodes),
+    edges: structuredClone(state.knowledgeEdges),
+    positions: structuredClone(state.positions),
+    viewConfig: structuredClone(state.viewConfig),
+  };
+}
+
+function recordHuman(before: GraphSnapshot, rationale: string): void {
+  void recordHumanGraph(before, snapshot(), rationale).catch((error) => {
+    console.warn("[common-ground] human graph edit was not recorded", error);
+  });
+}
+
 export const useGraphStore = create<GraphState>()((set, get) => ({
   knowledgeNodes: [],
   knowledgeEdges: [],
@@ -114,7 +131,8 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
       error: null,
     })),
 
-  onNodesChange: (changes) =>
+  onNodesChange: (changes) => {
+    const before = snapshot();
     set((s) => {
       const removedIds: string[] = [];
       const positionUpdates: { id: string; position: XYPosition }[] = [];
@@ -161,9 +179,12 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
       }
 
       return { knowledgeNodes, knowledgeEdges, positions, nodeSources, edgeSources };
-    }),
+    });
+    recordHuman(before, "human node change");
+  },
 
-  onEdgesChange: (changes) =>
+  onEdgesChange: (changes) => {
+    const before = snapshot();
     set((s) => {
       const removedIds = changes
         .filter((c) => c.type === "remove")
@@ -177,9 +198,12 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
         knowledgeEdges: s.knowledgeEdges.filter((e) => !removed.has(e.id)),
         edgeSources,
       };
-    }),
+    });
+    recordHuman(before, "human edge change");
+  },
 
-  onConnect: (conn) =>
+  onConnect: (conn) => {
+    const before = snapshot();
     set((s) => {
       if (!conn.source || !conn.target) return s;
       const exists = s.knowledgeEdges.some(
@@ -199,14 +223,19 @@ export const useGraphStore = create<GraphState>()((set, get) => ({
           [edge.id]: { note: null, createdAt: Date.now() },
         },
       };
-    }),
+    });
+    recordHuman(before, "human edge connection");
+  },
 
-  renameNode: (id, label) =>
+  renameNode: (id, label) => {
+    const before = snapshot();
     set((s) => ({
       knowledgeNodes: s.knowledgeNodes.map((n) =>
         n.id === id ? { ...n, label } : n
       ),
-    })),
+    }));
+    recordHuman(before, "human node rename");
+  },
 
   clearError: () => set({ error: null, status: "idle" }),
 
